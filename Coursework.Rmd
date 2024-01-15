@@ -1,0 +1,91 @@
+---
+title: "Coursework"
+author: "Han Songqiao"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+library(rstan)
+library(engsoccerdata)
+library(dplyr)
+library(bayesplot)
+library(ggplot2)
+library(rstanarm) 
+set.seed(777)
+data <- holland[holland$Season==2021,] #Dutch Eredivise games for season 2021/2022
+glimpse(data)#quick check of the data
+missing_values <- function(data){
+  result <- data %>%
+    select_if(function(x){any(is.na(x))}) %>% 
+    summarise_all(list(~ sum(is.na(.))))
+  return(result)
+}
+missing_values(data)
+```
+
+```{r}
+ng=nrow(data) #number of games
+nt=length(unique(data$home)) #number of teams
+teams = unique(data$home) #team names
+ht=unlist(sapply(1:ng,function(g)which(teams==data$home[g]))) #home team
+vt=unlist(sapply(1:ng,function(g)which(teams==data$visitor[g]))) #visiting team
+np=20 #setting 20 teams for prediction
+ngobs=ng-np #observation games for train data
+mydata=list(nt=nt,ng=ngobs,ht=ht[1:ngobs],vt=vt[1:ngobs],yh=data$hgoal[1:ngobs],yv=data$vgoal[1:ngobs],np=np,htpred=ht[(ngobs+1):ng],vtpred=vt[(ngobs+1):ng],iter=500, chains=4,cores=3) #setting chain=4, cores=3, iter=2000
+fit=stan(file='soccer.stan',data=mydata) #fit the model
+```
+
+```{r}
+plot(fit,  pars=c("home","mu_att","mu_def"), fill_color = "purple")
+plot(fit,  pars=c("tau_att","tau_def"), fill_color = "purple")
+parameters = extract(fit)
+pred_goals = c(colMeans(parameters$yhpred),colMeans(parameters$yvpred))
+true_goals = c(data$hgoal[(ngobs+1):ng],data$vgoal[(ngobs+1):ng] )
+plot(true_goals, pred_goals, xlim=c(0,5), ylim=c(0,5), pch=16,ylab='Predicted goals', xlab='True goals')
+abline(a=0, b=1, lty='dashed')
+pred_errors = c(sapply(1:np, function(x) sd(parameters$yhpred[,x])),sapply(1:np, function(x) sd(parameters$yvpred[,x])))
+arrows(true_goals, pred_goals+pred_errors, true_goals, pred_goals-pred_errors,length=0.1,angle=90,code=3,col=rgb(0,0,0,0.3))
+```
+
+```{r}
+att_ability = colMeans(parameters$att)
+def_ability = colMeans(parameters$def)
+plot(att_ability,def_ability,xlim=c(-1,1))
+abline(h=0)
+abline(v=0)
+text(att_ability,def_ability,labels=teams,cex=1,pos=2)
+```
+
+```{r}
+posterior <- as.array(fit)
+rhats <- rhat(fit)
+color_scheme_set("brightblue")
+mcmc_rhat(rhats)
+mcmc_pairs(posterior,pars = c("home", "mu_att", "mu_def", "tau_att","tau_def"),off_diag_args = list(size = 1.5))
+```
+
+```{r}
+lp <- log_posterior(fit)
+head(lp)
+np <- nuts_params(fit)
+head(np)
+color_scheme_set("red")
+mcmc_nuts_divergence(np, lp)
+mcmc_nuts_divergence(np, lp, chain = 4)
+```
+
+```{r}
+color_scheme_set("blue")
+mcmc_trace(posterior, pars = c("home"),np=np)
+color_scheme_set("mix-blue-red")
+mcmc_trace(posterior, pars = c("mu_att", "mu_def","tau_att","tau_def"), facet_args = list(ncol = 1, strip.position = "left"),np=np)
+```
+
+```{r}
+mcmc_acf_bar(posterior, pars = c("home", "mu_att", "mu_def", "tau_att","tau_def"), facet_args = list(labeller = ggplot2::label_parsed))
+ratios <- neff_ratio(fit)
+color_scheme_set("blue")
+mcmc_neff(ratios, size = 2)
+print(fit, pars=c("home","mu_att","mu_def","tau_att","tau_def"))
+```
